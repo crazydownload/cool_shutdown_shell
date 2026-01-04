@@ -9,6 +9,7 @@ ShutdownShell v1.4.5
  - При создании профиля мониторинга сети с дополнительным мониторингом дисков отмена выбора диска больше не приводит к ошибкам
  - В режиме редактирования профиля показываются изменения с помощью стрелочек (старое → новое значение)
  - Использование цифр 1/2 вместо букв для выбора типа трафика (Download/Upload)
+ - ИСПРАВЛЕН БАГ: Управление дисплеем (Ctrl+D) теперь работает корректно и не блокирует дальнейший ввод
 Автор: System Tools (modified)
 """
 
@@ -201,9 +202,12 @@ def save_profile(name: str, settings: dict) -> bool:
 # ---------------------- Управление дисплеем ----------------------
 
 def turn_off_display() -> bool:
+    """Выключает дисплей"""
     try:
-        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED)
-        ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, 2)
+        # Снимаем флаг ES_DISPLAY_REQUIRED перед выключением дисплея
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+        # Выключаем дисплей
+        result = ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, 2)
         print("\n🖥️ Дисплей выключен")
         return True
     except Exception as e:
@@ -212,6 +216,7 @@ def turn_off_display() -> bool:
 
 
 def turn_on_display() -> bool:
+    """Включает дисплей"""
     try:
         ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, -1)
         print("✅ Дисплей включён")
@@ -219,6 +224,14 @@ def turn_on_display() -> bool:
     except Exception as e:
         print(f"❌ Ошибка при включении дисплея: {e}")
         return False
+
+
+def restore_power_state():
+    """Восстанавливает нормальное состояние управления питанием"""
+    try:
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED)
+    except Exception as e:
+        print(f"⚠️ Ошибка восстановления состояния питания: {e}")
 
 # ---------------------- Действия (shutdown/restart/hibernate/beep) ----------------------
 
@@ -274,7 +287,7 @@ def check_user_input(cancel_event: threading.Event, monitoring_event: threading.
                     _ = msvcrt.getch()
                     continue
 
-                if b == bytes([27]):
+                if b == bytes([27]):  # ESC
                     cancel_event.set()
                     if monitoring_event:
                         monitoring_event.set()
@@ -285,7 +298,7 @@ def check_user_input(cancel_event: threading.Event, monitoring_event: threading.
                     print("\n🚨 Действие отменено! Нажмите Enter для возврата в меню...")
                     return
 
-                if b == bytes([19]) and monitoring_event is not None and pause_event is not None:
+                if b == bytes([19]) and monitoring_event is not None and pause_event is not None:  # Ctrl+S
                     if pause_event.is_set():
                         pause_event.clear()
                         print("\n▶️ Мониторинг продолжен (нажмите Ctrl+S для паузы)")
@@ -294,10 +307,13 @@ def check_user_input(cancel_event: threading.Event, monitoring_event: threading.
                         print("\n⏸️ Мониторинг приостановлен (нажмите любую клавишу для продолжения)")
                     continue
 
-                if b == bytes([4]):
+                if b == bytes([4]):  # Ctrl+D
                     try:
-                        turn_off_display()
-                        print("\n🖥️ Дисплей выключен (мониторинг продолжается)")
+                        success = turn_off_display()
+                        if success:
+                            print("\n🖥️ Дисплей выключен (мониторинг продолжается)")
+                            # Восстанавливаем возможность управления системой питания
+                            restore_power_state()
                     except Exception as e:
                         print(f"❌ Ошибка при выключении дисплея: {e}")
                     continue
@@ -866,7 +882,7 @@ def edit_profile(profile_name: str) -> bool:
         new['action_mode'] = new_action_mode
         
         action_names = {'s': 'Выключение', 'r': 'Перезагрузка', 'h': 'Спящий режим', 'b': 'Звуковой сигнал'}
-        show_change("Действие", 
+        show_change("Дейтие", 
                    action_names.get(old_action_mode, old_action_mode), 
                    action_names.get(new_action_mode, new_action_mode))
     
@@ -1284,6 +1300,9 @@ def choose_interface() -> str:
 
 def main():
     try:
+        # Восстанавливаем состояние питания при запуске
+        restore_power_state()
+        
         while True:
             print(f"\n╔{'═' * 60}╗")
             print(f"║{'ShutdownShell v' + __version__:^60}║")
@@ -1500,10 +1519,14 @@ def main():
                     c = input("\n🔘 Выберите: ")
                     if c == '1':
                         turn_off_display()
+                        # Восстанавливаем управление питанием
+                        restore_power_state()
                     elif c == '2':
                         turn_on_display()
                     elif c == '3':
                         ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, 2)
+                        time.sleep(0.5)
+                        restore_power_state()
                         print("✅ Дисплей переключён")
                     elif c == '4':
                         break
